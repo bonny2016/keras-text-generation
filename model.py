@@ -6,16 +6,16 @@ import pickle
 import random
 import sys
 import time
-
+import codecs
 from keras.callbacks import Callback
-from keras.layers import Dense, Dropout, Embedding, LSTM, TimeDistributed
-from keras.models import load_model, Sequential
+from tensorflow.keras.layers import Dense, Dropout, Embedding, LSTM, GRU, RNN, TimeDistributed
+from tensorflow.keras.models import load_model, Sequential
 import numpy as np
 
 from vectorizer import Vectorizer
 from utils import print_cyan, print_green, print_red
 from utils import sample_preds, shape_for_stateful_rnn, find_random_seeds
-
+from mygru import MGUCell
 
 class LiveSamplerCallback(Callback):
     """
@@ -51,7 +51,7 @@ class MetaModel:
     def _load_data(self, data_dir, word_tokens, pristine_input, pristine_output,
                    batch_size, seq_length, seq_step):
         try:
-            with open(os.path.join(data_dir, 'input.txt')) as input_file:
+            with open(os.path.join(data_dir, 'input.txt'), encoding='utf-8') as input_file:
                 text = input_file.read()
         except FileNotFoundError:
             print_red("No input.txt in data_dir")
@@ -88,16 +88,28 @@ class MetaModel:
         return x, y, x_val, y_val
 
     # Builds the underlying keras model
-    def _build_models(self, batch_size, embedding_size, rnn_size, num_layers):
+    def _build_models(self, batch_size, embedding_size, rnn_size, num_layers, rnn_type='GRU'):
         model = Sequential()
+        print(embedding_size)
         model.add(Embedding(self.vectorizer.vocab_size,
                             embedding_size,
                             batch_input_shape=(batch_size, None)))
         for layer in range(num_layers):
-            model.add(LSTM(rnn_size,
-                           stateful=True,
-                           return_sequences=True))
-            model.add(Dropout(0.2))
+            if rnn_type == 'GRU':
+                rnn_layer = GRU(rnn_size,
+                                return_sequences=True,
+                                stateful=True,
+                                recurrent_initializer='glorot_uniform')
+            elif rnn_type == 'LSTM':
+                rnn_layer= LSTM(rnn_size,
+                                stateful=True,
+                                return_sequences=True)
+            elif rnn_type == 'SMGU':
+                rnn_layer = RNN(MGUCell(rnn_size),
+                            return_sequences = True,
+                            stateful = True)
+            model.add(rnn_layer)
+            #model.add(Dropout(0.2))
         model.add(TimeDistributed(Dense(self.vectorizer.vocab_size,
                                         activation='softmax')))
         # With sparse_categorical_crossentropy we can leave as labels as
@@ -106,21 +118,30 @@ class MetaModel:
                       optimizer='rmsprop',
                       metrics=['accuracy'])
         model.summary()
-
+        return model
         # Keep a separate model with batch_size 1 for training
-        self.train_model = model
-        config = model.get_config()
-        config[0]['config']['batch_input_shape'] = (1, None)
-        self.sample_model = Sequential.from_config(config)
+        #self.train_model = model
+        '''
+        config = model.get_config()['layers'][0]
+        print(config)
+        config['config']['batch_input_shape'] = (1, None)
+        self.sample_model = Sequential.from_config(model.get_config())
         self.sample_model.trainable = False
+        self.sample_model = model
+        self.sample_model.trainable = False
+        '''
+
 
     def update_sample_model_weights(self):
         """Sync training and sampling model weights"""
+        config = self.sample_model.get_config()['layers'][0]
+        print(config)
+        config['config']['batch_input_shape'] = (1, None)
         self.sample_model.set_weights(self.train_model.get_weights())
 
     def train(self, data_dir, word_tokens, pristine_input, pristine_output,
               batch_size, seq_length, seq_step, embedding_size, rnn_size,
-              num_layers, num_epochs, live_sample):
+              num_layers, num_epochs, live_sample, rnn_type):
         """Train the model"""
         print_green('Loading data...')
         load_start = time.time()
@@ -132,7 +153,9 @@ class MetaModel:
 
         print_green('Building model...')
         model_start = time.time()
-        self._build_models(batch_size, embedding_size, rnn_size, num_layers)
+        self.train_model = self._build_models(batch_size, embedding_size, rnn_size, num_layers, rnn_type)
+        self.sample_model = self._build_models(1, embedding_size, rnn_size, num_layers)
+
         model_end = time.time()
         print_red('Model build time', model_end - model_start)
 
@@ -204,8 +227,13 @@ def save(model, data_dir):
 
 def load(data_dir):
     """Load the meta model and restore its internal keras model"""
+    # At loading time, register the custom objects with a `custom_object_scope`:
+    custom_objects = {"MGUCell": MGUCell,}
+    #new_model = keras.Model.from_config(config)
     keras_file_path = os.path.join(data_dir, 'model.h5')
     pickle_file_path = os.path.join(data_dir, 'model.pkl')
     model = pickle.load(open(pickle_file_path, 'rb'))
-    model.sample_model = load_model(keras_file_path)
+    model.sample_model = load_model(keras_file_path, custom_objects= custom_objects)
+    #model = load_model(keras_file_path, custom_objects= custom_objects)
+    #model.build(tf.TensorShape([1, None]))
     return model

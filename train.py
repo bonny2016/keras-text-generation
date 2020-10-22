@@ -7,8 +7,10 @@ from model import MetaModel, save
 
 def main():
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--data-dir', type=str, default='data/tinyshakespeare',
+    parser.add_argument('--data-dir', type=str, default='data/corona',
                         help='data directory containing input.txt')
+    parser.add_argument('--rnn-type', type=str, default='GRU',
+                        help='RNN type used [GRU|LSTM|SMGU]')
     parser.add_argument('--live-sample', action='store_true',
                         help='live sample the model after each epoch')
     parser.add_argument('--word-tokens', action='store_true',
@@ -21,7 +23,7 @@ def main():
                         help='size of the embedding')
     parser.add_argument('--rnn-size', type=int, default=128,
                         help='size of RNN layers')
-    parser.add_argument('--num-layers', type=int, default=2,
+    parser.add_argument('--num-layers', type=int, default=1,
                         help='number of layers in the RNN')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='minibatch size')
